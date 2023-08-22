@@ -1,0 +1,7 @@
+{
+  "port": "COM7",
+  "board": "arduino:avr:uno",
+  "sketch": "solar_controller.ino",
+  "programmer": "avrisp",
+  "output": "../build"
+}
