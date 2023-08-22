@@ -1,132 +1,120 @@
 #include <LiquidCrystal.h>
+#define BAT_CHARGE_CONTROL_PIN 3
+#define LOAD_CONTROL_PIN 4
+#define MAX_SOLAR_VOLT_DIVIDER 22
+#define MAX_BAT_VOLT_DIVIDER 15.6
+#define VOLT_READING_SAMPLES 100
+#define LCD_OUTPUT_DELAY 1000
+#define SERIAL_OUTPUT_DELAY 700
+#define MIN_BAT_VOLT 5
+
 LiquidCrystal lcd(7, 8, 9, 10, 11, 12);
 
-static const uint8_t batChargeControlPin = 3;
+float solar_volt = 0;  //  solar panel voltage
+float bat_volt = 0;    //  battery voltage
+float pwm_value = 0;   // pwm out put to npn base
 
-float solar_volt = 0;  // variable for solar panel voltage
-float bat_volt = 0;    // variable for battery voltage
-float pwm = 0;         // pwm out put to mosfet
-static const uint8_t loadControlPin = 4;
-const int delayTime = 200;  // Time between shifting LCD messages (in milliseconds)
-const float min_bat_volt = 5.0;
+unsigned long previous_millis_lcd = 0;
+bool lcd_shifted_left = false;
+unsigned long previous_millis_voltage_serial = 0;
 
 void setup() {
   Serial.begin(9600);
-  pinMode(loadControlPin, OUTPUT);
-  digitalWrite(batChargeControlPin, LOW);
-  digitalWrite(loadControlPin, LOW);
+  pinMode(LOAD_CONTROL_PIN, OUTPUT);
+  digitalWrite(BAT_CHARGE_CONTROL_PIN, LOW);
+  digitalWrite(LOAD_CONTROL_PIN, LOW);
   lcd.begin(16, 2);
   lcd.print("LUMUMBA 217016375");
 }
 
 void loop() {
   senseVoltage();
-  //for (float i = 0; i < 15; i += 1.5)
   chargeControl();
-
   chargeIndicators();
   loadControl();
 }
 
 void loadControl() {
   if (solar_volt > 10 && bat_volt > 7) {
-    digitalWrite(loadControlPin, HIGH);
-  } else if (bat_volt > min_bat_volt + 2) {
-    digitalWrite(loadControlPin, HIGH);
+    digitalWrite(LOAD_CONTROL_PIN, HIGH);
+  } else if (bat_volt > MIN_BAT_VOLT + 2) {
+    digitalWrite(LOAD_CONTROL_PIN, HIGH);
   } else
-    digitalWrite(loadControlPin, LOW);
+    digitalWrite(LOAD_CONTROL_PIN, LOW);
 }
 
-unsigned long previousMillis = 0;
-bool shiftedLeft = false;
 void chargeIndicators() {
-  // Non-blocking delay using millis()
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= delayTime) {
-    previousMillis = currentMillis;
-    if (shiftedLeft)
+  unsigned long current_millis = millis();
+  if (current_millis - previous_millis_lcd >= LCD_OUTPUT_DELAY) {
+    previous_millis_lcd = current_millis;
+    if (lcd_shifted_left)
       lcd.scrollDisplayRight();
     else
       lcd.scrollDisplayLeft();
-    shiftedLeft = !shiftedLeft;
+    lcd_shifted_left = !lcd_shifted_left;
     lcd.setCursor(0, 1);
     float charged_percent = bat_volt * 100 / 14;
-    if (charged_percent >= 90) charged_percent = 100;
+    if (charged_percent >= 90)
+      charged_percent = 100;
     lcd.print(String(" ") + bat_volt + String(" V ") + charged_percent);
   }
 }
 
 void chargeControl() {
-  if (solar_volt > bat_volt) {
+  if (solar_volt < 14) {
+    pwm_value = 250;
+  } else if (solar_volt > bat_volt) {
     if (bat_volt < 5) {
-      pwm = 60;
+      pwm_value = 60;
     } else if ((bat_volt > 5) && (bat_volt <= 7)) {
-      pwm = 150;
+      pwm_value = 200;
     } else if ((bat_volt > 7) && (bat_volt <= 12)) {
-      pwm = 200;
+      pwm_value = 200;
     } else if ((bat_volt > 12) && (bat_volt <= 14)) {
-      pwm = 150;
+      pwm_value = 150;
     } else if (bat_volt >= 14) {
-      pwm = 95;
+      pwm_value = 95;
     } else if (bat_volt >= 14.2) {
-      pwm = 30;
+      pwm_value = 30;
     }
   }
 
   if ((bat_volt >= 14.4) or (solar_volt < bat_volt)) {
-    pwm = 0;
+    pwm_value = 0;
   }
 
-  analogWrite(batChargeControlPin, pwm);
+  analogWrite(BAT_CHARGE_CONTROL_PIN, pwm_value);
 }
-
-unsigned long previousMillis_VoltageSerial = 0;
-
-float solarAnalogVolt = 1023;
-float solarMeasuredMaxVolt = 22;
-float solarMeasuredInput = 4.97;
-
-float batteryAnalogVolt = 1023;
-float batteryMeasuredMaxVolt = 15.6;
-float batteryMeasuredInput_At_14_4_V = 4.97;
-const uint8_t samples = 100;
 
 void senseVoltage() {
   float solarSample = 0;
   float batsample = 0;
-  for (int i = 0; i < samples; i++) {
+  for (int i = 0; i < VOLT_READING_SAMPLES; i++) {
     batsample += analogRead(A0);
     solarSample += analogRead(A1);
   }
 
-  batsample /= samples;
-  solarSample /= samples;
+  batsample /= VOLT_READING_SAMPLES;
+  solarSample /= VOLT_READING_SAMPLES;
 
-  solar_volt = mapFloat(solarSample, 0, solarAnalogVolt, 0, solarMeasuredMaxVolt);
-  bat_volt = mapFloat(batsample, 0, batteryAnalogVolt, 0, batteryMeasuredMaxVolt);
-  // delay(100);
-  // Serial.println(solarSample);
+  solar_volt = mapFloat(solarSample, 0, 1023, 0, MAX_SOLAR_VOLT_DIVIDER);
+  bat_volt = mapFloat(batsample, 0, 1023, 0, MAX_BAT_VOLT_DIVIDER);
   unsigned long currentMillis = millis();
 
-  if (currentMillis - previousMillis_VoltageSerial >= delayTime) {
-    previousMillis_VoltageSerial = currentMillis;
+  if (currentMillis - previous_millis_voltage_serial >= SERIAL_OUTPUT_DELAY) {
+    previous_millis_voltage_serial = currentMillis;
     Serial.println();
     Serial.print("solar input voltage :");
     Serial.println(solar_volt);
     Serial.print("battery voltage :");
     Serial.println(bat_volt);
     Serial.print("pwm duty cycle is : ");
-    Serial.println(pwm);
+    Serial.println(pwm_value);
   }
 }
 
 float mapFloat(float value, float fromLow, float fromHigh, float toLow, float toHigh) {
-  // Make sure not to divide by zero
-  if (fromHigh == fromLow) {
-    return toLow;
-  }
-
-  // Perform the mapping
+  if (fromHigh == fromLow) return toLow;
   return (value - fromLow) * (toHigh - toLow) / (fromHigh - fromLow) + toLow;
 }
 
@@ -141,7 +129,7 @@ void set_1024_PWM_Frequency_Prescaler(uint8_t pwmPin) {
   switch (pwmPin) {
     case 3:
     case 11:
-      //TCCR2B = (TCCR2B & 0b11111000) | 0x05;
+      // TCCR2B = (TCCR2B & 0b11111000) | 0x05;
       break;
     case 9:
     case 10:
