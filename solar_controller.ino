@@ -3,6 +3,7 @@
 #define LOAD_CONTROL_PIN 4
 #define MAX_SOLAR_VOLT_DIVIDER 22
 #define MAX_BAT_VOLT_DIVIDER 15.6
+#define MAX_BAT_VOLT_THRESHOLD 14.4
 #define VOLT_READING_SAMPLES 200
 #define LCD_OUTPUT_DELAY 10
 #define SERIAL_OUTPUT_DELAY 70
@@ -58,34 +59,41 @@ void chargeIndicators() {
       lcd.scrollDisplayLeft();
     lcd_shifted_left = !lcd_shifted_left;
     lcd.setCursor(0, 1);
-    float charged_percent = battery_volt * 100 / 14;
-    if (charged_percent >= 90)
+    float charged_percent = battery_volt * 100 / MAX_BAT_VOLT_THRESHOLD;
+    float battery_indication = battery_volt;
+
+    if (charged_percent >= 90) {
       charged_percent = 100;
-    lcd.print(String(" ") + battery_volt + String("V ") + charged_percent + "%");
+      battery_indication = 14.4;
+    }
+    lcd.print(String(" ") + battery_indication + String("V ") + charged_percent + "%");
   }
 }
 
 void chargeControl() {
   if (solar_volt > battery_volt) {
     if (battery_volt < 5) {
-      pwm_value = 60;
+      pwm_value = 70;
     } else if ((battery_volt > 5) && (battery_volt <= 7)) {
-      pwm_value = 90;
+      pwm_value = 100;
     } else if ((battery_volt > 7) && (battery_volt <= 12)) {
-      pwm_value = 170;
-    } else if ((battery_volt > 12) && (battery_volt <= 13)) {
       pwm_value = 180;
+    } else if ((battery_volt > 12) && (battery_volt <= 13)) {
+      pwm_value = 190;
     } else if ((battery_volt > 13) && (battery_volt <= 14)) {
-      pwm_value = 150;
-    } else if (battery_volt >= 14.2) {
-      pwm_value = 90;
+      pwm_value = 170;
+    } else if (battery_volt < 14.2) {
+      pwm_value = 95;
+    } else if (battery_volt > 14.2) {
+      pwm_value = 80;
     }
   }
 
-  if ((battery_volt >= 14.4) or (solar_volt < battery_volt)) {
+  if ((battery_volt == MAX_BAT_VOLT_THRESHOLD) or (solar_volt < battery_volt)) {
+    pwm_value = 20;
+  } else if ((battery_volt > MAX_BAT_VOLT_THRESHOLD) or (solar_volt < battery_volt)) {
     pwm_value = 0;
   }
-
   analogWrite(BAT_CHARGE_CONTROL_PIN, pwm_value);
 }
 
