@@ -1,13 +1,17 @@
 #include <LiquidCrystal.h>
+
 #define BAT_CHARGE_CONTROL_PIN 3
-#define LOAD_CONTROL_PIN 4
+#define SOLAR_LOAD_CONTROL_PIN 4
+#define BATTERY_LOAD_CONTROL_PIN 5
+
 #define MAX_SOLAR_VOLT_DIVIDER 22
 #define MAX_BAT_VOLT_DIVIDER 15.6
 #define MAX_BAT_VOLT_THRESHOLD 14.4
-#define VOLT_READING_SAMPLES 200
-#define LCD_OUTPUT_DELAY 10
-#define SERIAL_OUTPUT_DELAY 70
 #define MIN_BAT_VOLT 5
+
+#define VOLT_READING_SAMPLES 1000
+
+#define SERIAL_OUTPUT_DELAY 500
 
 LiquidCrystal lcd(7, 8, 9, 10, 11, 12);
 
@@ -16,18 +20,16 @@ float battery_volt = 0;  //  battery voltage
 float pwm_value = 0;     // pwm out put to npn base
 
 unsigned long previous_millis_lcd = 0;
-bool lcd_shifted_left = false;
 unsigned long previous_millis_voltage_serial = 0;
 
 void setup() {
-  TCCR2B = (TCCR2B & 0b11111000) | 0x03;
+  TCCR2B = (TCCR2B & 0b11111000) | 0x05;
   Serial.begin(9600);
 
-  pinMode(LOAD_CONTROL_PIN, OUTPUT);
-  pinMode(BAT_CHARGE_CONTROL_PIN, OUTPUT);
-
-  digitalWrite(BAT_CHARGE_CONTROL_PIN, LOW);
-  digitalWrite(LOAD_CONTROL_PIN, LOW);
+  for (uint8_t i = 3; i < 6; i++) {
+    pinMode(i, OUTPUT);
+    digitalWrite(i, LOW);
+  }
 
   lcd.begin(16, 2);
   lcd.print("LUMUMBA 217016375");
@@ -41,59 +43,66 @@ void loop() {
 }
 
 void loadControl() {
-  if (solar_volt > 10 && battery_volt > 7) {
-    digitalWrite(LOAD_CONTROL_PIN, HIGH);
-  } else if (battery_volt > MIN_BAT_VOLT + 2) {
-    digitalWrite(LOAD_CONTROL_PIN, HIGH);
-  } else
-    digitalWrite(LOAD_CONTROL_PIN, LOW);
+  if (solar_volt > 10) {
+    digitalWrite(BATTERY_LOAD_CONTROL_PIN, LOW);
+    digitalWrite(SOLAR_LOAD_CONTROL_PIN, HIGH);
+  } else if (battery_volt > MIN_BAT_VOLT) {
+    digitalWrite(SOLAR_LOAD_CONTROL_PIN, LOW);
+    digitalWrite(BATTERY_LOAD_CONTROL_PIN, HIGH);
+  } else {
+    digitalWrite(SOLAR_LOAD_CONTROL_PIN, LOW);
+    digitalWrite(BATTERY_LOAD_CONTROL_PIN, LOW);
+  }
+
+  //Just for safety reasons in case it happens
+  if (digitalRead(SOLAR_LOAD_CONTROL_PIN) && digitalRead(BATTERY_LOAD_CONTROL_PIN)) {
+    digitalWrite(SOLAR_LOAD_CONTROL_PIN, LOW);
+    digitalWrite(BATTERY_LOAD_CONTROL_PIN, LOW);
+  }
 }
 
 void chargeIndicators() {
-  unsigned long current_millis = millis();
-  if (current_millis - previous_millis_lcd >= LCD_OUTPUT_DELAY) {
-    previous_millis_lcd = current_millis;
-    if (lcd_shifted_left)
-      lcd.scrollDisplayRight();
-    else
-      lcd.scrollDisplayLeft();
-    lcd_shifted_left = !lcd_shifted_left;
-    lcd.setCursor(0, 1);
-    float charged_percent = battery_volt * 100 / MAX_BAT_VOLT_THRESHOLD;
-    float battery_indication = battery_volt;
+  lcd.setCursor(0, 1);
+  float charged_percent = battery_volt * 100 / MAX_BAT_VOLT_THRESHOLD;
+  float battery_indication = battery_volt;
 
-    if (charged_percent >= 90) {
-      charged_percent = 100;
-      battery_indication = 14.4;
-    }
-    lcd.print(String(" ") + battery_indication + String("V ") + charged_percent + "%");
+
+  if (battery_indication >= 14.1) {
+    charged_percent = 100;
+    battery_indication = 14.4;
   }
+  char* battery_str = toOnePrecision(battery_indication);
+  char* charged_percent_str = toOnePrecision(charged_percent);
+
+
+  lcd.print(" " + String(battery_str) + "V " + String(charged_percent_str) + "%");
+
+  // Free the dynamically allocated memory
+  free(battery_str);
+  free(charged_percent_str);
+}
+
+char* toOnePrecision(float value) {
+  char* str = (char*)malloc(10);  // Allocate memory for the string
+  dtostrf(value, 4, 1, str);
+  return str;
 }
 
 void chargeControl() {
   if (solar_volt > battery_volt) {
     if (battery_volt < 5) {
-      pwm_value = 70;
-    } else if ((battery_volt > 5) && (battery_volt <= 7)) {
-      pwm_value = 100;
-    } else if ((battery_volt > 7) && (battery_volt <= 12)) {
-      pwm_value = 180;
-    } else if ((battery_volt > 12) && (battery_volt <= 13)) {
-      pwm_value = 190;
-    } else if ((battery_volt > 13) && (battery_volt <= 14)) {
-      pwm_value = 170;
-    } else if (battery_volt < 14.2) {
-      pwm_value = 95;
-    } else if (battery_volt > 14.2) {
-      pwm_value = 80;
+      pwm_value = 250;  // Charge at maximum PWM when battery voltage is very low
+    } else if (battery_volt > 14.4) {
+      pwm_value = 0;  // Stop charging when battery voltage exceeds 14.4V
+    } else if (battery_volt >= 14.2 && battery_volt <= 14.4) {
+      pwm_value = 200;  // Reduce charging to a lower PWM when battery voltage is in the float range (14.2V to 14.4V)
+    } else {
+      pwm_value = 250;  // Charge at maximum PWM for other voltage ranges
     }
+  } else {
+    pwm_value = 0;  // Stop charging if solar voltage is less than battery voltage
   }
 
-  if ((battery_volt == MAX_BAT_VOLT_THRESHOLD) or (solar_volt < battery_volt)) {
-    pwm_value = 20;
-  } else if ((battery_volt > MAX_BAT_VOLT_THRESHOLD) or (solar_volt < battery_volt)) {
-    pwm_value = 0;
-  }
   analogWrite(BAT_CHARGE_CONTROL_PIN, pwm_value);
 }
 
@@ -121,6 +130,10 @@ void senseVoltage() {
     Serial.println(battery_volt);
     Serial.print("pwm duty cycle is : ");
     Serial.println(pwm_value);
+    Serial.print("battery loaded : ");
+    Serial.println(digitalRead(BATTERY_LOAD_CONTROL_PIN));
+    Serial.print("solar loaded : ");
+    Serial.println(digitalRead(SOLAR_LOAD_CONTROL_PIN));
   }
 }
 
